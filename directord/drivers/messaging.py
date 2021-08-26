@@ -1,4 +1,4 @@
-#   Copyright Peznauts <kevin@cloudnull.com>. All Rights Reserved.
+#   Copyright 2021 Red Hat, Inc.
 #
 #   Licensed under the Apache License, Version 2.0 (the "License"); you may
 #   not use this file except in compliance with the License. You may obtain
@@ -12,65 +12,101 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import proton
-from proton import handlers
-from proton import reactor
+import subprocess
+import struct
+import time
+
+from oslo_config import cfg
+import oslo_messaging
+from oslo_messaging.rpc import dispatcher
+from oslo_messaging.rpc.server import expose
 
 from directord import utils
 from directord import drivers
 
 
-class Server(handlers.MessagingHandler):
-    def __init__(self, url, log):
-        super(Server, self).__init__()
-        self.log = log
-        self.url = url
-        self.senders = {}
-
-    def on_start(self, event):
-        print("Listening on", self.url)
-        self.log.info("Listening on", self.url)
-        self.container = event.container
-        self.acceptor = event.container.listen(self.url)
-
-    def on_link_opening(self, event):
-        if event.link.is_sender:
-            if event.link.remote_source and event.link.remote_source.dynamic:
-                event.link.source.address = str(uuid.uuid4())
-                self.senders[event.link.source.address] = event.link
-            elif event.link.remote_target and event.link.remote_target.address:
-                event.link.target.address = event.link.remote_target.address
-                self.senders[event.link.remote_target.address] = event.link
-            elif event.link.remote_source:
-                event.link.source.address = event.link.remote_source.address
-        elif event.link.remote_target:
-            event.link.target.address = event.link.remote_target.address
-
-    def on_message(self, event):
-        print("Received", event.message)
-        sender = self.senders.get(event.message.reply_to)
-        if not sender:
-            print("No link for reply")
-            return
-        sender.send(Message(address=event.message.reply_to, body=event.message.body.upper(),
-                            correlation_id=event.message.correlation_id))
-
-
 class Driver(drivers.BaseDriver):
-    proto = "amqp"
-    port = 5672
 
-    def __init__(self, args, encrypted_traffic_data, bind_address):
+    def __init__(self, interface, args, encrypted_traffic_data, bind_address):
         super(Driver, self).__init__(
             args=args,
             encrypted_traffic_data=encrypted_traffic_data,
             bind_address=bind_address,
         )
+        self.mode = getattr(args, "mode", None)
+        # A reference to the interface object (either the Client or Server)
+        self.interface = interface
+        self.bind_address = bind_address
+        self.conf = cfg.CONF
+        self.conf.transport_url = 'amqp://{}:5672//'.format(self.bind_address)
+        self.log.info("Bind address: {}".format(self.bind_address))
+        self.transport = oslo_messaging.get_rpc_transport(self.conf)
 
     def run(self):
-        self.server = Server(self.bind_address, self.log)
-        self.container = reactor.Container(server)
-        self.container.run()
+        if self.mode == "server":
+            self.qdrouterd()
+            msg_server = "server"
+        else:
+            msg_server = "client"
+
+        target = oslo_messaging.Target(topic='heartbeat', server='server1')
+        endpoints = [self]
+        server = oslo_messaging.get_rpc_server(
+            self.transport, target, endpoints, executor='threading',
+            access_policy=dispatcher.ExplicitRPCAccessPolicy)
+        self.log.info("Starting messaging server.")
+        server.start()
+        while True:
+            time.sleep(1)
+
+    def qdrouterd(self):
+        self.log.info("Starting qdrouterd.")
+        proc = subprocess.run(['qdrouterd', '-d'], check=True)
+
+    def send(self, method, topic, message_parts):
+        target = oslo_messaging.Target(topic=topic)
+        client = oslo_messaging.RPCClient(self.transport, target)
+        return client.call({}, method, message_parts=message_parts)
+
+    @expose
+    def heartbeat(self, context, message_parts):
+        self.log.info("message_parts: {}".format(message_parts))
+        self.log.info("message_parts len: {}".format(len(message_parts)))
+        (
+            identity,
+            iD,
+            control,
+            command,
+            data,
+            info,
+            stderr,
+            stdout,
+        ) = message_parts
+        self.log.info("MODE: {}".format(self.mode))
+        self.log.info("RPC call: heartbeat")
+        self.log.info("message_parts: {}".format(message_parts))
+        self.log.info("first control: {}".format(control))
+        self.log.info("info: %s" % info)
+        if control in [ self.heartbeat_ready,
+                        self.heartbeat_notice,
+        ]:
+            print("CONTROL YESSSS")
+        if info:
+            info = struct.pack("<f", info)
+        self.interface.process_heartbeat(identity.encode(), control.encode(),
+                data, info)
+
+    def process_message_parts(self, message_parts):
+        if self.mode == 'client':
+            message_parts.insert(0, None)
+        return message_parts
+
+    def send_heartbeat(self, identity=None, control=None, data=None, info=None):
+        method = 'heartbeat'
+        topic = 'heartbeat'
+        message_parts = self.build_message_parts(
+            identity=identity, control=control, data=data, info=info)
+        return self.send(method, topic, message_parts)
 
     def socket_send(
         self,
@@ -138,6 +174,21 @@ class Driver(drivers.BaseDriver):
         :type stdout: Bytes
         """
 
+        message_parts = self.build_message_parts(
+            identity, msg_id, control, command, data, info, stderr, stdout)
+        return socket.send_multipart(message_parts)
+
+    def build_message_parts(
+        self,
+        identity=None,
+        msg_id=None,
+        control=None,
+        command=None,
+        data=None,
+        info=None,
+        stderr=None,
+        stdout=None,
+    ):
         if not msg_id:
             msg_id = utils.get_uuid().encode()
 
@@ -151,7 +202,9 @@ class Driver(drivers.BaseDriver):
             data = self.nullbyte
 
         if not info:
-            info = self.nullbyte
+            info = 0
+        else:
+            info = struct.unpack("<f", info)[0]
 
         if not stderr:
             stderr = self.nullbyte
@@ -160,13 +213,13 @@ class Driver(drivers.BaseDriver):
             stdout = self.nullbyte
 
         message_parts = [msg_id, control, command, data, info, stderr, stdout]
-        message = proton.Message(body=message_parts)
-        sender = self.server.senders.get(identity)
-        if not sender:
-            sender = self.container.create_sender(identity)
-            self.server.senders[identity] = sender
 
-        sender.send(Message)
+        if self.mode == 'client' and not identity:
+            identity = self.identity
+        if identity:
+            message_parts.insert(0, identity)
+
+        return message_parts
 
     @staticmethod
     def socket_recv(socket):

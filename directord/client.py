@@ -47,8 +47,7 @@ class Client(interface.Interface):
         with open("/proc/uptime", "r") as f:
             uptime = float(f.readline().split()[0])
 
-        self.driver.socket_send(
-            socket=self.bind_heatbeat,
+        self.driver.send_heartbeat(
             control=self.driver.heartbeat_notice,
             data=json.dumps(
                 {
@@ -60,6 +59,26 @@ class Client(interface.Interface):
         self.log.debug(
             "Sent heartbeat to server.",
         )
+
+    def process_heartbeat(self, control, command, data, info):
+        self.log.debug("Heartbeat received from server.")
+        if command == b"reset":
+            self.log.warning(
+                "Received heartbeat reset command. Connection"
+                " resetting."
+            )
+            dir(self.driver.heartbeat_reset)
+            print(self.driver.heartbeat_reset)
+            (
+                heartbeat_at,
+                self.bind_heatbeat,
+            ) = self.driver.heartbeat_reset(
+                bind_heatbeat=self.bind_heatbeat
+            )
+        else:
+            self.heartbeat_at = struct.unpack("<f", info)[0]
+            self.heartbeat_misses = 0
+            self.heartbeat_failure_interval = 2
 
     def run_heartbeat(self, sentinel=False, heartbeat_misses=0):
         """Execute the heartbeat loop.
@@ -78,9 +97,10 @@ class Client(interface.Interface):
         :type heartbeat_misses: Integer
         """
 
+        self.heartbeat_misses = heartbeat_misses
         self.bind_heatbeat = self.driver.heartbeat_connect()
         self.update_heartbeat()
-        heartbeat_at = self.driver.get_heartbeat(
+        self.heartbeat_at = self.driver.get_heartbeat(
             interval=self.heartbeat_interval
         )
         while True:
@@ -90,34 +110,16 @@ class Client(interface.Interface):
             ):
                 (
                     _,
-                    _,
+                    control,
                     command,
-                    _,
+                    data,
                     info,
                     _,
                     _,
                 ) = self.driver.socket_recv(socket=self.bind_heatbeat)
-                self.log.debug("Heartbeat received from server.")
-                if command == b"reset":
-                    self.log.warning(
-                        "Received heartbeat reset command. Connection"
-                        " resetting."
-                    )
-                    dir(self.driver.heartbeat_reset)
-                    print(self.driver.heartbeat_reset)
-                    (
-                        heartbeat_at,
-                        self.bind_heatbeat,
-                    ) = self.driver.heartbeat_reset(
-                        bind_heatbeat=self.bind_heatbeat
-                    )
-                else:
-                    heartbeat_at = struct.unpack("<f", info)[0]
-                    heartbeat_misses = 0
-
-                self.heartbeat_failure_interval = 2
+                self.process_heartbeat(control, command, data, info)
             else:
-                if time.time() > heartbeat_at and heartbeat_misses > 5:
+                if time.time() > self.heartbeat_at and self.heartbeat_misses > 5:
                     self.log.error("Heartbeat failure, can't reach server")
                     self.log.warning(
                         "Reconnecting in [ %s ]...",
@@ -130,7 +132,7 @@ class Client(interface.Interface):
 
                     self.log.debug("Running reconnection.")
                     (
-                        heartbeat_at,
+                        self.heartbeat_at,
                         self.bind_heatbeat,
                     ) = self.driver.heartbeat_reset(
                         bind_heatbeat=self.bind_heatbeat
@@ -140,7 +142,7 @@ class Client(interface.Interface):
                         interval=self.heartbeat_liveness,
                     )
                 else:
-                    heartbeat_misses += 1
+                    self.heartbeat_misses += 1
                     self.update_heartbeat()
 
             if sentinel:
@@ -412,5 +414,6 @@ class Client(interface.Interface):
         threads = [
             self.thread(target=self.run_heartbeat),
             self.thread(target=self.run_job),
+            self.thread(target=self.driver.run),
         ]
         self.run_threads(threads=threads)

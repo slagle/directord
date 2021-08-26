@@ -26,8 +26,10 @@ from directord import utils
 
 
 class Driver(drivers.BaseDriver):
+    proto = "tcp"
+
     def __init__(
-        self, args, encrypted_traffic_data=None, connection_string=None
+        self, interface, args, encrypted_traffic_data=None, connection_string=None
     ):
         """Initialize the Driver.
 
@@ -59,7 +61,7 @@ class Driver(drivers.BaseDriver):
         super(Driver, self).__init__(
             args=args,
             encrypted_traffic_data=encrypted_traffic_data,
-            connection_string=connection_string,
+            bind_address=bind_address,
         )
 
     def _socket_bind(

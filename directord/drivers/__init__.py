@@ -29,22 +29,34 @@ class BaseDriver:
     job_failed = b"\025"  # Signals job failed
     transfer_start = b"\002"  # Signals start file transfer
     transfer_end = b"\003"  # Signals start file transfer
+    port = None
 
     def __init__(
-        self, args, encrypted_traffic_data=None, connection_string=None
+        self, args, encrypted_traffic_data=None, bind_address=None
     ):
         """Initialize the Driver.
 
         :param args: Arguments parsed by argparse.
         :type args: Object
-        "param encrypted_traffic: Enable|Disable encrypted traffic.
+        :param encrypted_traffic: Enable|Disable encrypted traffic.
         :type encrypted_traffic: Boolean
+        :param bind_address: Bind address for the messaging driver
+        :type bind_address: String
         """
-
-        self.connection_string = connection_string
         self.identity = socket.gethostname()
         self.log = logger.getLogger(name="directord")
         self.args = args
+
+    @property
+    def connection_string(self):
+        connection_string = "{proto}://{addr}".format(
+            proto=self.proto, addr=self.bind_address
+        )
+        if self.port:
+            connection_string = "{}:{}".format(
+                    connection_string, self.property
+            )
+        return connection_string
 
     def socket_send(
         self,

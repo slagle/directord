@@ -49,11 +49,6 @@ class Interface(directord.Processor):
         else:
             self.bind_address = "*"
 
-        self.proto = "tcp"
-        self.connection_string = "{proto}://{addr}".format(
-            proto=self.proto, addr=self.bind_address
-        )
-
         self.heartbeat_liveness = 3
         try:
             self.heartbeat_interval = self.args.heartbeat_interval
@@ -79,11 +74,12 @@ class Interface(directord.Processor):
             )
         else:
             self.driver = _driver.Driver(
+                interface=self,
                 args=self.args,
                 encrypted_traffic_data={
                     "enabled": self.keys_exist,
                     "public_keys_dir": self.public_keys_dir,
                     "secret_keys_dir": self.secret_keys_dir,
                 },
-                connection_string=self.connection_string,
+                bind_address=self.bind_address,
             )

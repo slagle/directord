@@ -66,6 +66,41 @@ class Server(interface.Interface):
                     url=url._replace(path="").geturl(), database=(db + 2)
                 )
 
+    def process_heartbeat(self, identity, control, data, info):
+        self.log.info("Control: {}".format(control))
+        if control in [ self.driver.heartbeat_ready,
+                        self.driver.heartbeat_notice,
+        ]:
+            self.log.info(
+                "Received Heartbeat from [ %s ], client online",
+                identity.decode(),
+            )
+            expire = self.driver.get_expiry(
+                heartbeat_interval=self.heartbeat_interval,
+                interval=self.heartbeat_liveness,
+            )
+            worker_metadata = {"time": expire}
+            try:
+                loaded_data = json.loads(data.decode())
+            except Exception:
+                pass
+            else:
+                worker_metadata.update(loaded_data)
+
+            self.workers[identity] = worker_metadata
+            heartbeat_at = self.driver.get_heartbeat(
+                interval=self.heartbeat_interval
+            )
+            self.log.info("##################calling send_heartbeat")
+            self.driver.send_heartbeat(
+                identity=identity,
+                control=self.driver.heartbeat_notice,
+                info=struct.pack("<f", expire),
+            )
+            self.log.debug(
+                "Sent Heartbeat to [ %s ]", identity.decode()
+            )
+
     def run_heartbeat(self, sentinel=False):
         """Execute the heartbeat loop.
 
@@ -97,39 +132,7 @@ class Server(interface.Interface):
                     _,
                     _,
                 ) = self.driver.socket_recv(socket=self.bind_heatbeat)
-                if control in [
-                    self.driver.heartbeat_ready,
-                    self.driver.heartbeat_notice,
-                ]:
-                    self.log.debug(
-                        "Received Heartbeat from [ %s ], client online",
-                        identity.decode(),
-                    )
-                    expire = self.driver.get_expiry(
-                        heartbeat_interval=self.heartbeat_interval,
-                        interval=self.heartbeat_liveness,
-                    )
-                    worker_metadata = {"time": expire}
-                    try:
-                        loaded_data = json.loads(data.decode())
-                    except Exception:
-                        pass
-                    else:
-                        worker_metadata.update(loaded_data)
-
-                    self.workers[identity] = worker_metadata
-                    heartbeat_at = self.driver.get_heartbeat(
-                        interval=self.heartbeat_interval
-                    )
-                    self.driver.socket_send(
-                        socket=self.bind_heatbeat,
-                        identity=identity,
-                        control=self.driver.heartbeat_notice,
-                        info=struct.pack("<f", expire),
-                    )
-                    self.log.debug(
-                        "Sent Heartbeat to [ %s ]", identity.decode()
-                    )
+                self.process_heartbeat(identity, control, data)
 
             # Send heartbeats to idle workers if it's time
             elif time.time() > idle_time:
@@ -137,8 +140,7 @@ class Server(interface.Interface):
                     self.log.warning(
                         "Sending idle worker [ %s ] a heartbeat", worker
                     )
-                    self.driver.socket_send(
-                        socket=self.bind_heatbeat,
+                    self.driver.send_heartbeat(
                         identity=worker,
                         control=self.driver.heartbeat_notice,
                         command=b"reset",
@@ -676,6 +678,7 @@ class Server(interface.Interface):
             self.thread(target=self.run_socket_server),
             self.thread(target=self.run_heartbeat),
             self.thread(target=self.run_interactions),
+            self.thread(target=self.driver.run),
         ]
 
         if self.args.run_ui:
