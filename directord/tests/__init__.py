@@ -244,7 +244,7 @@ class TestConnectionBase(unittest.TestCase):
 
 class TestDriverBase(unittest.TestCase):
     def setUp(self):
-        base_driver = drivers.BaseDriver(args=FakeArgs())
+        base_driver = drivers.BaseDriver(interface="server", args=FakeArgs())
         self.mock_driver_patched = patch(
             "directord.drivers.BaseDriver",
             autospec=True,

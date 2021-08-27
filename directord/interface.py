@@ -14,6 +14,8 @@
 
 import logging
 import os
+import uuid
+
 import directord
 
 
@@ -49,6 +51,8 @@ class Interface(directord.Processor):
         else:
             self.bind_address = "*"
 
+        self.uuid = str(uuid.uuid4())
+
         self.proto = "tcp"
         self.connection_string = "{proto}://{addr}".format(
             proto=self.proto, addr=self.bind_address
@@ -79,6 +83,7 @@ class Interface(directord.Processor):
             )
         else:
             self.driver = _driver.Driver(
+                interface=self,
                 args=self.args,
                 encrypted_traffic_data={
                     "enabled": self.keys_exist,

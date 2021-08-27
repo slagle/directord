@@ -15,8 +15,8 @@
 import datetime
 import json
 import os
-import struct
 import time
+import uuid
 
 import diskcache
 
@@ -47,31 +47,37 @@ class Client(interface.Interface):
         self.base_component = components.ComponentBase()
         self.cache = dict()
         self.start_time = time.time()
+        self.heartbeat_misses = 0
 
     def update_heartbeat(self):
         with open("/proc/uptime", "r") as f:
             uptime = float(f.readline().split()[0])
+        host_uptime = str(datetime.timedelta(seconds=uptime))
+        agent_uptime = str(datetime.timedelta(
+            seconds=(time.time() - self.start_time)))
 
-        self.driver.socket_send(
-            socket=self.bind_heatbeat,
-            control=self.driver.heartbeat_notice,
-            data=json.dumps(
-                {
-                    "version": directord.__version__,
-                    "host_uptime": str(datetime.timedelta(seconds=uptime)),
-                    "agent_uptime": str(
-                        datetime.timedelta(
-                            seconds=(time.time() - self.start_time)
-                        )
-                    ),
-                }
-            ).encode(),
-        )
+        self.driver.heartbeat_send(
+            source_uuid=self.uuid,
+            host_uptime=host_uptime, agent_uptime=agent_uptime)
         self.log.debug(
             "Sent heartbeat to server.",
         )
 
-    def run_heartbeat(self, sentinel=False, heartbeat_misses=0):
+    def handle_heartbeat(self, heartbeat_at, reset, source_uuid=None):
+        self.log.debug("Heartbeat received from server.")
+        if reset:
+            self.log.warning(
+                "Received heartbeat reset command. Connection"
+                " resetting."
+            )
+            self.heartbeat_at = self.driver.heartbeat_reset()
+        else:
+            self.heartbeat_at = heartbeat_at
+            self.heartbeat_misses = 0
+
+        self.heartbeat_failure_interval = 2
+
+    def run_heartbeat(self, sentinel=False):
         """Execute the heartbeat loop.
 
         If the heartbeat loop detects a problem, the connection will be
@@ -87,45 +93,20 @@ class Client(interface.Interface):
         :param heartbeat_misses: Sets the current misses.
         :type heartbeat_misses: Integer
         """
-
-        self.bind_heatbeat = self.driver.heartbeat_connect()
+        self.driver.heartbeat_init()
         self.update_heartbeat()
-        heartbeat_at = self.driver.get_heartbeat(
+        self.heartbeat_at = self.driver.get_heartbeat(
             interval=self.heartbeat_interval
         )
         while True:
-            self.log.debug("Heartbeat misses [ %s ]", heartbeat_misses)
-            if self.bind_heatbeat and self.driver.bind_check(
-                interval=self.heartbeat_interval, bind=self.bind_heatbeat
-            ):
-                (
-                    _,
-                    _,
-                    command,
-                    _,
-                    info,
-                    _,
-                    _,
-                ) = self.driver.socket_recv(socket=self.bind_heatbeat)
-                self.log.debug("Heartbeat received from server.")
-                if command == b"reset":
-                    self.log.warning(
-                        "Received heartbeat reset command. Connection"
-                        " resetting."
-                    )
-                    (
-                        heartbeat_at,
-                        self.bind_heatbeat,
-                    ) = self.driver.heartbeat_reset(
-                        bind_heatbeat=self.bind_heatbeat
-                    )
-                else:
-                    heartbeat_at = struct.unpack("<f", info)[0]
-                    heartbeat_misses = 0
-
-                self.heartbeat_failure_interval = 2
+            self.log.debug("Heartbeat misses [ %s ]", self.heartbeat_misses)
+            if self.driver.heartbeat_check(self.heartbeat_interval):
+                heartbeat_at, reset = self.driver.heartbeat_client_receive()
+                self.handle_heartbeat(heartbeat_at, reset)
             else:
-                if time.time() > heartbeat_at and heartbeat_misses > 5:
+                if (time.time() > self.heartbeat_at
+                        and self.heartbeat_misses > 5):
+
                     self.log.error("Heartbeat failure, can't reach server")
                     self.log.warning(
                         "Reconnecting in [ %s ]...",
@@ -137,18 +118,13 @@ class Client(interface.Interface):
                         self.heartbeat_failure_interval *= 2
 
                     self.log.debug("Running reconnection.")
-                    (
-                        heartbeat_at,
-                        self.bind_heatbeat,
-                    ) = self.driver.heartbeat_reset(
-                        bind_heatbeat=self.bind_heatbeat
-                    )
-                    heartbeat_at = self.driver.get_expiry(
+                    self.heartbeat_at = self.driver.heartbeat_reset()
+                    self.heartbeat_at = self.driver.get_expiry(
                         heartbeat_interval=self.heartbeat_interval,
                         interval=self.heartbeat_liveness,
                     )
                 else:
-                    heartbeat_misses += 1
+                    self.heartbeat_misses += 1
                     self.update_heartbeat()
 
             if sentinel:
@@ -667,8 +643,7 @@ class Client(interface.Interface):
         else:
             self.log.debug("Found task results for [ %s ].", job["job_id"])
             with utils.ClientStatus(
-                socket=self.bind_job,
-                job_id=job["job_id"].encode(),
+                job_id=job["job_id"],
                 command=command,
                 ctx=self,
             ) as c:
@@ -753,6 +728,61 @@ class Client(interface.Interface):
 
         return cache_check_time
 
+    def handle_job(self, command, job, info, sentinel=False):
+        job["job_sha3_224"] = job_sha3_224 = job.get(
+            "job_sha3_224", utils.object_sha3_224(job)
+        )
+        self.driver.job_client_ack(job_id)
+
+        job_parent_id = job.get("parent_id")
+        job_parent_sha3_224 = job.get("parent_sha3_224")
+        self.log.info(
+            "Item received: parent job UUID [ %s ],"
+            " parent job sha3_224 [ %s ], job UUID [ %s ],"
+            " job sha3_224 [ %s ]",
+            job_parent_id,
+            job_parent_sha3_224,
+            job_id,
+            job_sha3_224,
+        )
+
+        with utils.ClientStatus(
+            job_id=job_id,
+            command=command,
+            ctx=self,
+        ) as c:
+            if job_parent_id and not self._parent_check(
+                conn=c, cache=cache, job=job
+            ):
+                self.q_return.put(
+                    (
+                        None,
+                        None,
+                        False,
+                        b"Job omitted, parent failure",
+                        job,
+                        command,
+                        0,
+                        None,
+                    )
+                )
+            else:
+                c.job_state = self.driver.job_processing
+                component_kwargs = dict(cache=None, job=job)
+                self.log.debug(
+                    "Queuing component [ %s ], job_id [ %s ]",
+                    command.decode(),
+                    job_id,
+                )
+                c.info = b"task queued"
+                self.q_processes.put(
+                    (
+                        component_kwargs,
+                        command,
+                        info,
+                    )
+                )
+
     def run_job(self, sentinel=False):
         """Job entry point.
 
@@ -769,7 +799,7 @@ class Client(interface.Interface):
         :type sentinel: Boolean
         """
 
-        self.bind_job = self.driver.job_connect()
+        self.driver.job_init()
         poller_time = time.time()
         poller_interval = 1
         cache_check_time = time.time()
@@ -783,79 +813,9 @@ class Client(interface.Interface):
                     log=self.log,
                 )
 
-            if self.driver.bind_check(
-                bind=self.bind_job, constant=poller_interval
-            ):
-                poller_interval, poller_time = 1, time.time()
-                (
-                    _,
-                    _,
-                    command,
-                    data,
-                    info,
-                    _,
-                    _,
-                ) = self.driver.socket_recv(socket=self.bind_job)
-                job = json.loads(data.decode())
-                job["job_id"] = job_id = job.get("job_id", utils.get_uuid())
-                job["job_sha3_224"] = job_sha3_224 = job.get(
-                    "job_sha3_224", utils.object_sha3_224(job)
-                )
-                self.driver.socket_send(
-                    socket=self.bind_job,
-                    msg_id=job_id.encode(),
-                    control=self.driver.job_ack,
-                )
-
-                job_parent_id = job.get("parent_id")
-                job_parent_sha3_224 = job.get("parent_sha3_224")
-                self.log.info(
-                    "Item received: parent job UUID [ %s ],"
-                    " parent job sha3_224 [ %s ], job UUID [ %s ],"
-                    " job sha3_224 [ %s ]",
-                    job_parent_id,
-                    job_parent_sha3_224,
-                    job_id,
-                    job_sha3_224,
-                )
-
-                with utils.ClientStatus(
-                    socket=self.bind_job,
-                    job_id=job_id.encode(),
-                    command=command,
-                    ctx=self,
-                ) as c:
-                    if job_parent_id and not self._parent_check(
-                        conn=c, cache=self.cache, job=job
-                    ):
-                        self.q_return.put(
-                            (
-                                None,
-                                None,
-                                False,
-                                b"Job omitted, parent failure",
-                                job,
-                                command,
-                                0,
-                                None,
-                            )
-                        )
-                    else:
-                        c.job_state = self.driver.job_processing
-                        component_kwargs = dict(cache=None, job=job)
-                        self.log.debug(
-                            "Queuing component [ %s ], job_id [ %s ]",
-                            command.decode(),
-                            job_id,
-                        )
-                        c.info = b"task queued"
-                        self.q_processes.put(
-                            (
-                                component_kwargs,
-                                command,
-                                info,
-                            )
-                        )
+            if self.driver.job_check(constant=poller_interval):
+                command, job, info = self.driver.job_client_receive()
+                self.handle_job(command, job, info, sentinel)
             else:
                 cache_check_time = self.prune_cache(
                     cache_check_time=cache_check_time
@@ -883,6 +843,7 @@ class Client(interface.Interface):
                 ),
                 False,
             ),
+            (self.thread(target=self.driver.run), True),
         ]
         # Ensure that the cache path exists before executing.
         os.makedirs(self.args.cache_path, exist_ok=True)
