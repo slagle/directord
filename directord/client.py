@@ -683,6 +683,64 @@ class Client(interface.Interface):
 
         return cache_check_time
 
+    def handle_job(self, command, data, info):
+        job = json.loads(data)
+        job["job_id"] = job_id = job.get("job_id", utils.get_uuid())
+        job["job_sha3_224"] = job_sha3_224 = job.get(
+            "job_sha3_224", utils.object_sha3_224(job)
+        )
+        self.driver.job_ack_send(job_id=job_id)
+
+        job_parent_id = job.get("parent_id")
+        job_parent_sha3_224 = job.get("parent_sha3_224")
+        self.log.info(
+            "Item received: parent job UUID [ %s ],"
+            " parent job sha3_224 [ %s ], job UUID [ %s ],"
+            " job sha3_224 [ %s ]",
+            job_parent_id,
+            job_parent_sha3_224,
+            job_id,
+            job_sha3_224,
+        )
+
+        with utils.ClientStatus(
+            socket=self.driver.bind_job,
+            job_id=job_id.encode(),
+            command=command,
+            ctx=self,
+        ) as c:
+            if job_parent_id and not self._parent_check(
+                conn=c, cache=self.cache, job=job
+            ):
+                self.q_return.put(
+                    (
+                        None,
+                        None,
+                        False,
+                        b"Job omitted, parent failure",
+                        job,
+                        command,
+                        0,
+                        None,
+                    )
+                )
+            else:
+                c.job_state = self.driver.job_processing
+                component_kwargs = dict(cache=None, job=job)
+                self.log.debug(
+                    "Queuing component [ %s ], job_id [ %s ]",
+                    command,
+                    job_id,
+                )
+                c.info = b"task queued"
+                self.q_processes.put(
+                    (
+                        component_kwargs,
+                        command,
+                        info,
+                    )
+                )
+
     def run_job(self, lock=None, sentinel=False):
         """Job entry point.
 
@@ -705,15 +763,15 @@ class Client(interface.Interface):
         poller_interval = 1
         cache_check_time = time.time()
         run_q_processor_thread = None
-        q_processes = self.get_queue()
+        self.q_processes = self.get_queue()
         while True:
             if self.terminate_process(process=run_q_processor_thread):
                 run_q_processor_thread = None
 
-            if not q_processes.empty() and not run_q_processor_thread:
+            if not self.q_processes.empty() and not run_q_processor_thread:
                 run_q_processor_thread = self.thread(
                     target=self.job_q_processor,
-                    kwargs=dict(q_processes=q_processes, lock=lock),
+                    kwargs=dict(q_processes=self.q_processes, lock=lock),
                     name="job_q_processor",
                     daemon=False,
                 )
@@ -742,11 +800,9 @@ class Client(interface.Interface):
                 heartbeat_time = time.time() + 30
                 self.log.info("Heartbeat sent to server")
 
-            if self.driver.bind_check(
-                bind=self.driver.bind_job, constant=poller_interval
-            ):
-                poller_interval, poller_time = 1, time.time()
+            if self.driver.job_check(constant=poller_interval):
                 (
+                    _,
                     _,
                     _,
                     command,
@@ -754,67 +810,9 @@ class Client(interface.Interface):
                     info,
                     _,
                     _,
-                ) = self.driver.socket_recv(socket=self.driver.bind_job)
-                job = json.loads(data.decode())
-                job["job_id"] = job_id = job.get("job_id", utils.get_uuid())
-                job["job_sha3_224"] = job_sha3_224 = job.get(
-                    "job_sha3_224", utils.object_sha3_224(job)
-                )
-                self.driver.socket_send(
-                    socket=self.driver.bind_job,
-                    msg_id=job_id.encode(),
-                    control=self.driver.job_ack,
-                )
-
-                job_parent_id = job.get("parent_id")
-                job_parent_sha3_224 = job.get("parent_sha3_224")
-                self.log.info(
-                    "Item received: parent job UUID [ %s ],"
-                    " parent job sha3_224 [ %s ], job UUID [ %s ],"
-                    " job sha3_224 [ %s ]",
-                    job_parent_id,
-                    job_parent_sha3_224,
-                    job_id,
-                    job_sha3_224,
-                )
-
-                with utils.ClientStatus(
-                    socket=self.driver.bind_job,
-                    job_id=job_id.encode(),
-                    command=command,
-                    ctx=self,
-                ) as c:
-                    if job_parent_id and not self._parent_check(
-                        conn=c, cache=self.cache, job=job
-                    ):
-                        self.q_return.put(
-                            (
-                                None,
-                                None,
-                                False,
-                                b"Job omitted, parent failure",
-                                job,
-                                command,
-                                0,
-                                None,
-                            )
-                        )
-                    else:
-                        c.job_state = self.driver.job_processing
-                        component_kwargs = dict(cache=None, job=job)
-                        self.log.debug(
-                            "Queuing component [ %s ], job_id [ %s ]",
-                            command.decode(),
-                            job_id,
-                        )
-                        c.info = b"task queued"
-                        q_processes.put(
-                            (
-                                component_kwargs,
-                                command,
-                                info,
-                            )
-                        )
+                ) = self.driver.job_recv()
+                poller_interval, poller_time = 1, time.time()
+                self.handle_job(command, data, info)
             else:
                 cache_check_time = self.prune_cache(
                     cache_check_time=cache_check_time

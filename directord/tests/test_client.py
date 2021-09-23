@@ -31,19 +31,19 @@ class TestClient(tests.TestDriverBase):
     @patch("time.time", autospec=True)
     def test_run_job(self, mock_time):
         mock_time.side_effect = [1, 1, 1, 1, 1, 1]
-        with patch.object(self.mock_driver, "bind_check", return_value=False):
+        with patch.object(self.mock_driver, "job_check", return_value=False):
             self.client.run_job(sentinel=True)
 
     @patch("time.time", autospec=True)
     def test_run_job_idle(self, mock_time):
         mock_time.side_effect = [1, 1, 66, 1, 1, 1]
-        with patch.object(self.mock_driver, "bind_check", return_value=False):
+        with patch.object(self.mock_driver, "job_check", return_value=False):
             self.client.run_job(sentinel=True)
 
     @patch("time.time", autospec=True)
     def test_run_job_ramp(self, mock_time):
         mock_time.side_effect = [1, 1, 1, 34, 1, 1]
-        with patch.object(self.mock_driver, "bind_check", return_value=False):
+        with patch.object(self.mock_driver, "job_check", return_value=False):
             self.client.run_job(sentinel=True)
 
     @patch("diskcache.Cache", autospec=True)
@@ -55,7 +55,7 @@ class TestClient(tests.TestDriverBase):
     ):
         mock_time.side_effect = [1, 1, 1, 1, 5000, 1, 1, 1, 1, 1]
         mock_diskcache.return_value = tests.FakeCache()
-        with patch.object(self.mock_driver, "bind_check", return_value=False):
+        with patch.object(self.mock_driver, "job_check", return_value=False):
             self.client.run_job(sentinel=True)
 
     @patch("diskcache.Cache", autospec=True)
@@ -74,8 +74,9 @@ class TestClient(tests.TestDriverBase):
             "job_id": "XXX",
             "job_sha3_224": "YYY",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",
@@ -107,8 +108,9 @@ class TestClient(tests.TestDriverBase):
             "job_id": "XXX",
             "job_sha3_224": "YYY",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",
@@ -138,8 +140,9 @@ class TestClient(tests.TestDriverBase):
             "parent_id": "ZZZ",
             "command": "RUN",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",
@@ -171,8 +174,9 @@ class TestClient(tests.TestDriverBase):
             "job_id": "XXX",
             "job_sha3_224": "YYY",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",
@@ -206,8 +210,9 @@ class TestClient(tests.TestDriverBase):
             "job_id": "XXX",
             "job_sha3_224": "YYY",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",
@@ -241,8 +246,9 @@ class TestClient(tests.TestDriverBase):
             "job_id": "XXX",
             "job_sha3_224": "YYY",
         }
-        self.mock_driver.socket_recv.side_effect = [
+        self.mock_driver.job_recv.side_effect = [
             (
+                "",
                 None,
                 None,
                 b"RUN",

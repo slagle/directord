@@ -374,6 +374,7 @@ class Driver(drivers.BaseDriver):
         else:
             flags = 0
 
+        self.log.debug("socket_send: {}".format(message_parts))
         return socket.send_multipart(message_parts, flags=flags)
 
     @staticmethod
@@ -427,6 +428,9 @@ class Driver(drivers.BaseDriver):
     def job_recv(self):
         """Receive a job message."""
 
+        message_parts = Driver.socket_recv(socket=self.bind_job)
+        if len(message_parts) == 7:
+            message_parts.insert(0, b"")
         (
             identity,
             msg_id,
@@ -436,7 +440,7 @@ class Driver(drivers.BaseDriver):
             info,
             stderr,
             stdout,
-        ) = Driver.socket_recv(socket=self.bind_job)
+        ) = message_parts
         return (
             identity.decode(),
             msg_id.decode(),
@@ -474,6 +478,52 @@ class Driver(drivers.BaseDriver):
         else:
             self.bind_job = self.job_connect()
         return self.bind_job
+
+    def job_check(self, constant):
+        """Check if the driver is ready to respond to a job request
+
+        :param constant: Constant time used to poll for new jobs.
+        :type constant: Integer
+        :returns: Boolean
+        """
+        if self.bind_job and self.bind_check(
+            bind=self.bind_job, constant=constant
+        ):
+            return True
+        else:
+            return False
+
+    def job_ack_send(self, job_id):
+        """Send job ack
+
+        :param job_id: Job Id
+        :type job_id: String
+        """
+        self.socket_send(
+            socket=self.bind_job,
+            msg_id=job_id.encode(),
+            control=self.job_ack,
+        )
+
+    def job_send(self, identity, command, data="", info=""):
+        """Send job.
+
+        :param identity: Client identity
+        :type identity: String
+        :param command: Job command
+        :type command: String
+        :param data: Job data
+        :type data: Dictionary
+        """
+        # We don't need identity.encode() here because the keys in self.workers
+        # are encoded already.
+        self.socket_send(
+            socket=self.bind_job,
+            identity=identity,
+            command=command.encode(),
+            data=data.encode(),
+            info=info.encode(),
+        )
 
     def backend_connect(self):
         """Connect to a backend socket and return the socket.

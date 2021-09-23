@@ -201,6 +201,7 @@ class Server(interface.Interface):
         self.return_jobs[job_id] = job_metadata
 
     def create_return_jobs(self, task, job_item, targets):
+        self.log.debug("return job: {}".format(job_item))
         return self.return_jobs.set(
             task,
             {
@@ -220,6 +221,99 @@ class Server(interface.Interface):
                 "_processing": dict(),
             },
         )
+
+    def handle_job_server(
+        self, control, identity, msg_id, data, info, stderr, stdout
+    ):
+        """Handle a job sent to the server.
+
+        :param identity: Client identity
+        :type identity: String
+        :param msg_id: Message/Job Id
+        :type msg_id: String
+        :param data: Job data
+        :type data: Dictionary
+        :param info: Job info
+        :type info: Dictionary
+        :param stderr: Job stderr
+        :type stderr: String
+        :param stdout: Job stdout
+        :type stdout: String
+        """
+        self.log.debug("Execution job received [ %s ]", msg_id)
+        node = identity
+        node_output = info
+        if stderr:
+            stderr = stderr
+        if stdout:
+            stdout = stdout
+
+        try:
+            data_item = json.loads(data)
+        except Exception:
+            data_item = dict()
+
+        self._set_job_status(
+            job_status=control,
+            job_id=msg_id,
+            identity=node,
+            job_output=node_output,
+            job_stdout=stdout,
+            job_stderr=stderr,
+            execution_time=data_item.get("execution_time", 0),
+            return_timestamp=data_item.get("return_timestamp", 0),
+            component_exec_timestamp=data_item.get(
+                "component_exec_timestamp", 0
+            ),
+            recv_time=time.time(),
+        )
+
+        for new_task in data_item.get("new_tasks", list()):
+            self.log.debug("New task found: %s", new_task)
+            if "targets" in new_task and new_task["targets"]:
+                targets = [i.encode() for i in new_task["targets"]]
+                self.log.debug(
+                    "Using existing targets from old job" " specification %s",
+                    targets,
+                )
+            else:
+                targets = self.workers.keys()
+                self.log.debug(
+                    "Targets undefined in old job specification"
+                    " running everwhere"
+                )
+
+            # NOTE(cloudnull): If the new task identity is set but
+            #                  with a null value, reset the value
+            #                  to that of the known workers.
+            if "identity" in new_task and not new_task["identity"]:
+                self.log.debug("identities reset to all workers")
+                new_task["identity"] = [
+                    i.encode() for i in self.workers.keys()
+                ]
+
+            if "job_id" not in new_task:
+                new_task["job_id"] = utils.get_uuid()
+
+            self.create_return_jobs(
+                task=new_task["job_id"],
+                job_item=new_task,
+                targets=targets,
+            )
+
+            for target in targets:
+                self.log.debug(
+                    "Queuing callback job [ %s ] for identity" " [ %s ]",
+                    new_task["job_id"],
+                    target,
+                )
+                self.send_queue.put(
+                    dict(
+                        identity=target,
+                        command=new_task["verb"],
+                        data=new_task,
+                    )
+                )
 
     def run_job(self, sentinel=False):
         """Run a job interaction
@@ -283,7 +377,7 @@ class Server(interface.Interface):
                         self._set_job_status(
                             job_status=self.driver.job_failed,
                             job_id=job_item["job_id"],
-                            identity=target.decode(),
+                            identity=target,
                             job_output=(
                                 "Target unknown. Available targets {}".format(
                                     list(self.workers.keys())
@@ -303,12 +397,12 @@ class Server(interface.Interface):
                     #                  callback tasks are scoped to only
                     #                  the nodes defined within the job
                     #                  execution.
-                    job_item["targets"] = [i.decode() for i in targets]
+                    job_item["targets"] = [i for i in targets]
                     targets = self.workers.keys()
                 elif job_item.get("run_once", False):
                     self.log.debug("Run once enabled.")
                     targets = [targets[0]]
-                    job_item["targets"] = [targets[0].decode()]
+                    job_item["targets"] = [targets[0]]
 
                 job_id = job_item.get("job_id", utils.get_uuid())
                 job_info = self.create_return_jobs(
@@ -342,26 +436,26 @@ class Server(interface.Interface):
                                 " file_path [ %s ] to identity [ %s ]",
                                 job_item["job_id"],
                                 file_path,
-                                identity.decode(),
+                                identity,
                             )
                             self.send_queue.put(
                                 dict(
                                     identity=identity,
-                                    command=job_item["verb"].encode(),
+                                    command=job_item["verb"],
                                     data=job_item,
-                                    info=file_path.encode(),
+                                    info=file_path,
                                 )
                             )
                     else:
                         self.log.debug(
                             "Queuing job [ %s ] for identity [ %s ]",
                             job_item["job_id"],
-                            identity.decode(),
+                            identity,
                         )
                         self.send_queue.put(
                             dict(
                                 identity=identity,
-                                command=job_item["verb"].encode(),
+                                command=job_item["verb"],
                                 data=job_item,
                             )
                         )
@@ -584,17 +678,13 @@ class Server(interface.Interface):
                     self.log.debug(
                         "Sending job [ %s ] sent to [ %s ]",
                         send_item["data"]["job_id"],
-                        send_item["identity"].decode(),
+                        send_item["identity"],
                     )
-                    send_item["data"] = json.dumps(send_item["data"]).encode()
-                    self.driver.socket_send(
-                        socket=self.driver.bind_job,
-                        **send_item,
-                    )
+                    send_item["data"] = json.dumps(send_item["data"])
+                    self.driver.job_send(**send_item)
 
-            if self.driver.bind_check(
-                bind=self.driver.bind_job, constant=poller_interval
-            ):
+            poller_interval, poller_time = 1, time.time()
+            if self.driver.job_check(constant=poller_interval):
                 (
                     identity,
                     msg_id,
@@ -608,83 +698,15 @@ class Server(interface.Interface):
                 if control == self.driver.heartbeat_notice:
                     self.handle_heartbeat(identity, data)
                 else:
-                    poller_interval, poller_time = 1, time.time()
-                    self.log.debug("Execution job received [ %s ]", msg_id)
-                    node = identity
-                    node_output = info
-                    if stderr:
-                        stderr = stderr
-                    if stdout:
-                        stdout = stdout
-
-                    try:
-                        data_item = json.loads(data)
-                    except Exception:
-                        data_item = dict()
-
-                    self._set_job_status(
-                        job_status=control,
-                        job_id=msg_id,
-                        identity=node,
-                        job_output=node_output,
-                        job_stdout=stdout,
-                        job_stderr=stderr,
-                        execution_time=data_item.get("execution_time", 0),
-                        return_timestamp=data_item.get("return_timestamp", 0),
-                        component_exec_timestamp=data_item.get(
-                            "component_exec_timestamp", 0
-                        ),
-                        recv_time=time.time(),
+                    self.handle_job_server(
+                        control,
+                        identity,
+                        msg_id,
+                        data,
+                        info,
+                        stderr,
+                        stdout,
                     )
-
-                    for new_task in data_item.get("new_tasks", list()):
-                        self.log.debug("New task found: %s", new_task)
-                        if "targets" in new_task and new_task["targets"]:
-                            targets = [i.encode() for i in new_task["targets"]]
-                            self.log.debug(
-                                "Using existing targets from old job"
-                                " specification %s",
-                                targets,
-                            )
-                        else:
-                            targets = self.workers.keys()
-                            self.log.debug(
-                                "Targets undefined in old job specification"
-                                " running everwhere"
-                            )
-
-                        # NOTE(cloudnull): If the new task identity is set but
-                        #                  with a null value, reset the value
-                        #                  to that of the known workers.
-                        if "identity" in new_task and not new_task["identity"]:
-                            self.log.debug("identities reset to all workers")
-                            new_task["identity"] = [
-                                i.decode() for i in self.workers.keys()
-                            ]
-
-                        if "job_id" not in new_task:
-                            new_task["job_id"] = utils.get_uuid()
-
-                        self.create_return_jobs(
-                            task=new_task["job_id"],
-                            job_item=new_task,
-                            targets=targets,
-                        )
-
-                        for target in targets:
-                            self.log.debug(
-                                "Queuing callback job [ %s ] for identity"
-                                " [ %s ]",
-                                new_task["job_id"],
-                                target.decode(),
-                            )
-                            self.send_queue.put(
-                                dict(
-                                    identity=target,
-                                    command=new_task["verb"].encode(),
-                                    data=new_task,
-                                )
-                            )
 
             if time.time() > prune_time:
                 self.workers.prune()

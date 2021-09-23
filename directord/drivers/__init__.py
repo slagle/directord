@@ -281,3 +281,22 @@ class BaseDriver:
         """
 
         pass
+
+    def job_check(self, constant):
+        """Check if the driver is ready to respond to a job request
+
+        :param constant: Constant time used to poll for new jobs.
+        :type constant: Integer
+        :returns: Boolean
+        """
+
+        pass
+
+    def job_ack_send(self, job_id):
+        """Send job ack
+
+        :param job_id: Job Id
+        :type job_id: String
+        """
+
+        pass
