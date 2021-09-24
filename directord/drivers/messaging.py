@@ -15,7 +15,6 @@
 import json
 import subprocess
 import time
-import multiprocessing
 
 from oslo_config import cfg
 import oslo_messaging
@@ -61,17 +60,12 @@ class Driver(drivers.BaseDriver):
         )
         self.transport = oslo_messaging.get_rpc_transport(self.conf)
 
+    def run_driver(self):
+        """Run in server mode."""
+
         # TODO(cloudnull): Start the qrouterd process when in server mode.
         #                  This should be removed once we're confident with
         #                  the driver capability in favor of requirement docs.
-        self._driver_server = multiprocessing.Process(
-            target=self._run, daemon=True
-        )
-        self._driver_server.start()
-
-    def _run(self):
-        """Run in server mode."""
-
         if self.mode == "server":
             self.qdrouterd()
             server_target = "directord"

@@ -364,3 +364,8 @@ class BaseDriver:
         """
 
         pass
+
+    def run_driver(self):
+        """Run in server mode."""
+
+        pass

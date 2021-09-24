@@ -889,6 +889,10 @@ class Client(interface.Interface):
                 ),
                 False,
             ),
+            (
+                self.thread(name="run_driver", target=self.driver.run_driver),
+                True,
+            ),
         ]
         # Ensure that the cache path exists before executing.
         os.makedirs(self.args.cache_path, exist_ok=True)
