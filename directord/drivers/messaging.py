@@ -19,6 +19,8 @@ import pkg_resources
 import queue
 import time
 
+import queue
+
 try:
     from oslo_config import cfg
     import oslo_messaging
@@ -174,7 +176,7 @@ class Driver(drivers.BaseDriver):
     def get_queue():
         """Returns a thread lock."""
 
-        return multiprocessing.Queue()
+        return queue.Queue()
 
     def _rpc_conf(self):
         """Initialize the RPC configuration.
