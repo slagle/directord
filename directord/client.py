@@ -24,8 +24,6 @@ from directord import interface
 from directord import utils
 
 
-import threading
-
 class Client(interface.Interface):
     """Directord client class."""
 
@@ -832,7 +830,7 @@ class Client(interface.Interface):
 
         threads = [
             (
-                self.driver.threading.Thread(
+                self.driver.thread_processor(
                     name="run_job", target=self.run_job, kwargs=dict(lock=lock)
                 ),
                 False,
