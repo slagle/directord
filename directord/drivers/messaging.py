@@ -510,7 +510,7 @@ class Driver(drivers.BaseDriver):
                 server=server_target,
             ),
             endpoints=[self],
-            executor="threading",
+            executor="eventlet",
             access_policy=dispatcher.ExplicitRPCAccessPolicy,
         )
 
