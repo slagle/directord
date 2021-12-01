@@ -152,9 +152,9 @@ class Driver(drivers.BaseDriver):
         self.transport = self._rpc_transport()
         self.server = None
         self.backend_server = None
-        self.job_q = queue.Queue()
-        self.backend_q = queue.Queue()
-        self.send_q = queue.Queue()
+        self.job_q = self.get_queue()
+        self.backend_q = self.get_queue()
+        self.send_q = self.get_queue()
         self.process_send_q = None
         self.timeout = 1
 
