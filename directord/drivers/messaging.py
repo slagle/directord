@@ -278,6 +278,8 @@ class Driver(drivers.BaseDriver):
             queue.put(data)
         except Exception as e:
             self.log.debug("Exception Queue {}, Put {}, Exception {}".format(str(queue), str(data), str(e)))
+            self.log.debug("Exception Queue Reader {}".format(str(queue._reader))
+            self.log.debug("Exception Queue Writer {}".format(str(queue._writer))
             import traceback
             traceback.print_exc()
 
