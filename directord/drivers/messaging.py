@@ -39,6 +39,7 @@ from directord import drivers
 from directord import logger
 from directord import utils
 
+import multiprocessing
 
 def parse_args(parser, parser_server, parser_client):
     """Add arguments for this driver to the parser.
@@ -157,6 +158,24 @@ class Driver(drivers.BaseDriver):
         self.process_send_q = None
         self.timeout = 1
 
+        self.thread_processor = multiprocessing.Process
+        self.event = multiprocessing.Event()
+
+        logger = multiprocessing.log_to_stderr()
+        logger.setLevel(logging.DEBUG)
+
+    @staticmethod
+    def get_lock():
+        """Returns a thread lock."""
+
+        return multiprocessing.Lock()
+
+    @staticmethod
+    def get_queue():
+        """Returns a thread lock."""
+
+        return multiprocessing.Queue()
+
     def _rpc_conf(self):
         """Initialize the RPC configuration.
 
@@ -240,7 +259,7 @@ class Driver(drivers.BaseDriver):
         """
 
         self.log.debug("Handling heartbeat for [ %s ]", kwargs.get("identity"))
-        self.job_q.put(
+        self.queue_put(self.job_q,
             [
                 kwargs.get("identity"),
                 kwargs.get("job_id"),
@@ -252,6 +271,15 @@ class Driver(drivers.BaseDriver):
                 None,
             ]
         )
+
+    def queue_put(self, queue, data):
+        self.log.debug("Queue {}, Put {}".format(str(queue), str(data)))
+        try:
+            queue.put(data)
+        except Exception as e:
+            self.log.debug("Exception Queue {}, Put {}, Exception {}".format(str(queue), str(data), str(e)))
+            import traceback
+            traceback.print_exc()
 
     @expose
     def _job(
@@ -301,7 +329,7 @@ class Driver(drivers.BaseDriver):
         if self.mode == "server":
             job.insert(0, kwargs.get("identity"))
 
-        self.job_q.put(job)
+        self.queue_put(self.job_q, job)
 
     @expose
     def _backend(
@@ -351,7 +379,7 @@ class Driver(drivers.BaseDriver):
         if self.mode == "server":
             job.insert(0, kwargs.get("identity"))
 
-        self.backend_q.put(job)
+        self.queue_put(self.backend_q, job)
 
     def _close(self, process_obj):
         """Close the backend.
