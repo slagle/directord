@@ -701,6 +701,42 @@ class TestMain(tests.TestBase):
         mock_print.assert_called()
         mock_jinja.assert_called()
 
+    @patch("jinja2.FileSystemLoader", autospec=True)
+    @patch("builtins.print")
+    @patch("os.path.exists", autospec=True)
+    @patch("os.makedirs", autospec=True)
+    def test_systemdinstall_server_service_file_dir(
+        self, mock_makedirs, mock_exists, mock_print, mock_jinja
+    ):
+        mock_exists.return_value = False
+        with patch("builtins.open", unittest.mock.mock_open()) as m:
+            main.SystemdInstall(service_file_dir="/service-file-dir").writer(
+                service_file="directord-client.service"
+            )
+            m.assert_called_with(
+                "/service-file-dir/directord-client.service", "w"
+            )
+        mock_print.assert_called()
+        mock_jinja.assert_called()
+
+    @patch("jinja2.FileSystemLoader", autospec=True)
+    @patch("builtins.print")
+    @patch("os.path.exists", autospec=True)
+    @patch("os.makedirs", autospec=True)
+    def test_systemdinstall_client_service_file_dir(
+        self, mock_makedirs, mock_exists, mock_print, mock_jinja
+    ):
+        mock_exists.return_value = False
+        with patch("builtins.open", unittest.mock.mock_open()) as m:
+            main.SystemdInstall(service_file_dir="/service-file-dir").writer(
+                service_file="directord-client.service"
+            )
+            m.assert_called_with(
+                "/service-file-dir/directord-client.service", "w"
+            )
+        mock_print.assert_called()
+        mock_jinja.assert_called()
+
     @patch("directord.main._args", autospec=True)
     def test_main_server(self, mock__args):
         _args = {

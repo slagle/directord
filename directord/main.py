@@ -451,7 +451,14 @@ def _args(exec_args=None):
 class SystemdInstall:
     """Simple system service unit creation class."""
 
-    def __init__(self, group="root", force=False):
+    def __init__(
+        self,
+        group="root",
+        force=False,
+        binary_path=None,
+        config_file_dir="/etc/directord",
+        service_file_dir="/etc/systemd/system",
+    ):
         """Class to create systemd service units.
 
         This class is used with the directord-server-systemd and
@@ -463,16 +470,25 @@ class SystemdInstall:
         :type force: Boolean
         """
 
-        self.config_path = "/etc/directord"
         self.socket_group = group
         self.force = force
+        self.config_file_dir = config_file_dir
+        self.service_file_dir = service_file_dir
+        if binary_path is None:
+            self.binary_path = os.path.abspath(os.path.dirname(sys.argv[0]))
+        else:
+            self.binary_path = binary_path
 
     def path_setup(self):
         """Create the configuration path and basic configuration file."""
 
-        os.makedirs(self.config_path, exist_ok=True)
-        if not os.path.exists("/etc/directord/config.yaml"):
-            with open("/etc/directord/config.yaml", "w") as f:
+        os.makedirs(self.config_file_dir, exist_ok=True)
+        config_file_path = os.path.join(
+            self.config_file_dir,
+            "config.yaml",
+        )
+        if not os.path.exists(config_file_path):
+            with open(config_file_path, "w") as f:
                 f.write("---\ndebug: false\n")
             print("[+] Created empty configuration file")
 
@@ -484,10 +500,9 @@ class SystemdInstall:
         :type service_file: String
         """
 
-        path = os.path.abspath(os.path.dirname(sys.argv[0]))
         self.path_setup()
         base = os.path.dirname(directord.__file__)
-        service_file_path = "/etc/systemd/system/{}".format(service_file)
+        service_file_path = "{}/{}".format(self.service_file_dir, service_file)
         if os.path.exists(service_file_path) and not self.force:
             print(
                 "[-] Service file was not created because it already exists."
@@ -504,7 +519,7 @@ class SystemdInstall:
         )
         blueprint = blueprintEnv.get_template("{}.j2".format(service_file))
         blueprint_args = {
-            "directord_binary": os.path.join(path, "directord"),
+            "directord_binary": os.path.join(self.binary_path, "directord"),
             "directord_group": self.socket_group,
         }
         outputText = blueprint.render(**blueprint_args)
@@ -547,8 +562,29 @@ def _systemd_loader():
         help="Force install systemd service unit file.",
         action="store_true",
     )
+    parser.add_argument(
+        "--config-file-dir",
+        help="Directory where config file(s) will be created.",
+        default="/etc/directord",
+    )
+    parser.add_argument(
+        "--service-file-dir",
+        help="Directory where service file(s) will be created.",
+        default="/etc/systemd/system",
+    )
+    parser.add_argument(
+        "--binary-path",
+        help=("Path to the Directord binary. "
+              "Defaults to path for used directord binary.")
+    )
     args = parser.parse_args()
-    return SystemdInstall(group=args.group, force=args.force)
+    return SystemdInstall(
+        group=args.group,
+        force=args.force,
+        binary_path=args.binary_path,
+        config_file_dir=args.config_file_dir,
+        service_file_dir=args.service_file_dir,
+    )
 
 
 def _systemd_server():

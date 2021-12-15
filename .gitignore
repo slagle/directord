@@ -79,3 +79,9 @@ doc/source/user/aio/scenario-table-gen.html
 # Jekyll generated site
 docs/_site
 docs/Gemfile.lock
+
+# Generated config
+config
+
+# Generated systemd unit files
+systemd
