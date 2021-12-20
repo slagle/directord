@@ -9,6 +9,7 @@ License:        None
 URL:            https://github.com/directord/directord
 Version:        %{released_version}
 Source0:        directord.tar.gz
+
 BuildArch:      noarch
 
 BuildRequires:  python3-devel
@@ -21,6 +22,7 @@ BuildRequires:  python3-setuptools
 BuildRequires:  python3-tabulate
 BuildRequires:  python3-tenacity
 BuildRequires:  python3-oslo-messaging
+BuildRequires:  systemd-rpm-macros
 
 # Source Build Requirements
 # TODO(cloudnull): This needs to be packaged officially
@@ -69,6 +71,8 @@ rm -rf %{pypi_name}.egg-info
 mkdir -p %{buildroot}/%{_sysconfdir}/directord
 mkdir -p %{buildroot}/%{_sysconfdir}/directord/private_keys
 mkdir -p %{buildroot}/%{_sysconfdir}/directord/public_keys
+%{buildroot}/%{_bindir}/directord-client-systemd --service-file-dir %{_unitdir}
+%{buildroot}/%{_bindir}/directord-server-systemd --service-file-dir %{_unitdir}
 
 %check
 # (slagle) Disable unit tests for the time being
@@ -87,6 +91,31 @@ true
 %{python3_sitelib}/%{pypi_name}
 %{python3_sitelib}/%{pypi_name}-%{released_version}-py%{python3_version}.egg-info
 %{_sysconfdir}/directord
+
+%package server
+Summary:        Server components for Directord
+
+%description server
+Server components for Directord, including the Systemd unit files
+
+%install server
+directord-server-systemd
+mv %{buildroot}/etc/systemd/system/directord-server.service
+%{buildroot}/%{_unitdir}/directord-server.service
+
+%files server
+%{_bindir}/directord-server-systemd
+%{_unitdir}/directord-server.service
+
+%package client
+Summary:        Client components for Directord
+
+%description client
+Client components for Directord, including the Systemd unit files
+
+%files client
+%{_bindir}/directord-client-systemd
+%{_unitdir}/directord-client.service
 
 %changelog
 * Thu Jul 29 2021 Kevin Carter <kecarter@redhat.com>
