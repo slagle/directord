@@ -98,11 +98,6 @@ Summary:        Server components for Directord
 %description server
 Server components for Directord, including the Systemd unit files
 
-%install server
-directord-server-systemd
-mv %{buildroot}/etc/systemd/system/directord-server.service
-%{buildroot}/%{_unitdir}/directord-server.service
-
 %files server
 %{_bindir}/directord-server-systemd
 %{_unitdir}/directord-server.service
