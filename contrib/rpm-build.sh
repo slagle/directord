@@ -7,7 +7,7 @@ CONTAINER_NAME=localhost/centos8-builder
 pushd ${SCRIPT_DIR}/../
   name=${PWD##*/}
   pushd ..
-  tar -czf /tmp/directord.tar.gz "${name}"
+  tar -czf /tmp/directord.tar.gz --exclude .tox "${name}"
   mv /tmp/directord.tar.gz ${SCRIPT_DIR}/container-build/
   popd
 popd

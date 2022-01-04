@@ -23,6 +23,7 @@ BuildRequires:  python3-tabulate
 BuildRequires:  python3-tenacity
 BuildRequires:  python3-oslo-messaging
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  python3dist(pytest)
 
 # Source Build Requirements
 # TODO(cloudnull): This needs to be packaged officially
@@ -71,8 +72,9 @@ rm -rf %{pypi_name}.egg-info
 mkdir -p %{buildroot}/%{_sysconfdir}/directord
 mkdir -p %{buildroot}/%{_sysconfdir}/directord/private_keys
 mkdir -p %{buildroot}/%{_sysconfdir}/directord/public_keys
-%{buildroot}/%{_bindir}/directord-client-systemd --service-file-dir %{_unitdir}
-%{buildroot}/%{_bindir}/directord-server-systemd --service-file-dir %{_unitdir}
+%tox -e gensystemd
+mkdir -p %{buildroot}/%{_unitdir}
+cp systemd/*service %{buildroot}/%{_unitdir}
 
 %check
 # (slagle) Disable unit tests for the time being
